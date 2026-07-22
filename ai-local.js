@@ -9,6 +9,42 @@ const mobileDevice =
   (navigator.deviceMemory && navigator.deviceMemory <= 4);
 
 let worker = null;
+let responseTimer = null;
+
+function clearResponseTimer() {
+  if (responseTimer) clearTimeout(responseTimer);
+  responseTimer = null;
+}
+
+function localFallback() {
+  const cleaned = passage.value
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const excerpt = cleaned.slice(0, 260);
+  return (
+    "Réflexion locale (mode léger)\n\n" +
+    (excerpt
+      ? "Le passage fourni rappelle : « " + excerpt + (cleaned.length > 260 ? "…" : "") + " »\n\n"
+      : "") +
+    "Pour ta question — « " + question.value.trim() + " » — commence par identifier l’inquiétude précise que tu portes aujourd’hui. " +
+    "Relis ensuite le passage lentement et note ce qu’il t’invite à croire, à remettre à Dieu ou à faire aujourd’hui. " +
+    "Cette réponse de secours n’ajoute aucun verset : elle utilise uniquement le texte que tu as fourni."
+  );
+}
+
+function startResponseTimer() {
+  clearResponseTimer();
+  responseTimer = setTimeout(() => {
+    worker?.terminate();
+    worker = null;
+    askButton.disabled = false;
+    aiStatus.textContent = "Le téléphone a mis trop de temps : réponse de secours produite localement.";
+    answer.textContent = localFallback();
+    localStorage.setItem("bsc-ai-answer", answer.textContent);
+  }, mobileDevice ? 60000 : 150000);
+}
+
 function getWorker() {
   if (worker) return worker;
   worker = new Worker("./ai-worker.js?v=2", { type: "module" });
@@ -53,9 +89,14 @@ function handleWorkerMessage(event) {
       percent + " — garde cette page ouverte.";
   } else if (data.type === "ready") {
     aiStatus.textContent = data.mobileDevice
-      ? "IA légère prête sur ce téléphone."
-      : "IA locale prête sur cet appareil.";
+      ? "Modèle léger chargé. Rédaction de la réponse en cours…"
+      : "Modèle chargé. Rédaction de la réponse en cours…";
+  } else if (data.type === "generating") {
+    aiStatus.textContent = data.mobileDevice
+      ? "Rédaction en cours sur le téléphone… Cela peut prendre jusqu’à une minute."
+      : "Rédaction de la réponse en cours…";
   } else if (data.type === "answer") {
+    clearResponseTimer();
     askButton.disabled = false;
     answer.textContent = data.answer || "Le modèle n’a pas produit de réponse.";
     aiStatus.textContent =
@@ -64,6 +105,7 @@ function handleWorkerMessage(event) {
     localStorage.setItem("bsc-ai-question", question.value);
     localStorage.setItem("bsc-ai-answer", answer.textContent);
   } else if (data.type === "error") {
+    clearResponseTimer();
     askButton.disabled = false;
     aiStatus.textContent = "Le moteur local n’a pas pu démarrer.";
     answer.textContent =
@@ -89,11 +131,12 @@ askButton.addEventListener("click", () => {
       ? "Chargement avec l’accélération graphique…"
       : "Chargement sur le processeur… cela peut être long.";
 
+  startResponseTimer();
   getWorker().postMessage({
     type: "ask",
     question: q,
-    passage: passage.value.trim().slice(0, mobileDevice ? 2200 : 5000),
-    notes: collectPrivateNotes()
+    passage: passage.value.trim().slice(0, mobileDevice ? 1400 : 5000),
+    notes: collectPrivateNotes().slice(0, mobileDevice ? 1400 : 7000)
   });
 });
 
