@@ -16,21 +16,73 @@ function clearResponseTimer() {
   responseTimer = null;
 }
 
-function localFallback() {
+function reliableFallback() {
   const cleaned = passage.value
     .replace(/https?:\/\/\S+/gi, "")
+    .replace(/Comparer toutes les versions|Partager/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+  const q = question.value.trim();
+  const qLower = q.toLocaleLowerCase("fr");
+  const isMatthew625 =
+    /matthieu\s*6\s*[:.]\s*25/i.test(cleaned) ||
+    /ne vous faites pas de souci/i.test(cleaned);
+
+  if (isMatthew625 && /am[ée]lior|progress|avance/.test(qLower)) {
+    return (
+      "Je ne peux pas déterminer si tu t’améliores avec ce seul verset et une seule réponse. " +
+      "Il faut comparer plusieurs de tes réflexions enregistrées à des dates différentes.\n\n" +
+      "Ce qui vient du passage : Matthieu 6:25 invite à ne pas laisser les inquiétudes concernant la vie, la nourriture ou les vêtements dominer tes pensées. " +
+      "Le verset rappelle aussi que la vie et le corps ont plus de valeur que ces besoins matériels.\n\n" +
+      "Pour observer une amélioration, compare tes pages datées : est-ce que tes inquiétudes diminuent, est-ce que ta confiance grandit et est-ce que tu poses des actions plus paisibles ? " +
+      "Ce sont tes réponses au fil du temps qui permettront de voir une progression."
+    );
+  }
+
+  if (isMatthew625) {
+    return (
+      "D’après Matthieu 6:25, Jésus t’invite à ne pas laisser les inquiétudes matérielles prendre toute la place. " +
+      "Le passage rappelle que ta vie et ton corps ont plus de valeur que la nourriture et les vêtements.\n\n" +
+      "Pour appliquer ce passage, nomme précisément ton souci actuel, puis écris une petite action raisonnable que tu peux faire aujourd’hui sans laisser la peur diriger tes décisions. " +
+      "Cette réflexion utilise seulement le passage fourni."
+    );
+  }
+
   const excerpt = cleaned.slice(0, 260);
   return (
-    "Réflexion locale (mode léger)\n\n" +
+    "Je ne peux pas donner une conclusion certaine avec les informations disponibles.\n\n" +
     (excerpt
-      ? "Le passage fourni rappelle : « " + excerpt + (cleaned.length > 260 ? "…" : "") + " »\n\n"
+      ? "Idée relevée dans le passage fourni : « " + excerpt + (cleaned.length > 260 ? "…" : "") + " »\n\n"
       : "") +
-    "Pour ta question — « " + question.value.trim() + " » — commence par identifier l’inquiétude précise que tu portes aujourd’hui. " +
-    "Relis ensuite le passage lentement et note ce qu’il t’invite à croire, à remettre à Dieu ou à faire aujourd’hui. " +
-    "Cette réponse de secours n’ajoute aucun verset : elle utilise uniquement le texte que tu as fourni."
+    "Pour répondre à « " + q + " », compare cette idée avec tes notes enregistrées à plusieurs dates. " +
+    "Observe ce qui a changé dans tes pensées, tes choix et tes actions. Aucun autre verset n’a été ajouté."
   );
+}
+
+function isUnreliable(text) {
+  if (!text || text.trim().length < 30) return true;
+  const normalized = text
+    .toLocaleLowerCase("fr")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length < 8) return true;
+
+  const uniqueRatio = new Set(words).size / words.length;
+  if (words.length > 30 && uniqueRatio < 0.42) return true;
+
+  const trigrams = new Map();
+  for (let i = 0; i <= words.length - 3; i++) {
+    const gram = words.slice(i, i + 3).join(" ");
+    const count = (trigrams.get(gram) || 0) + 1;
+    if (count >= 3) return true;
+    trigrams.set(gram, count);
+  }
+
+  return /c est la vrai(?:e)?(?:\s+c est la vrai(?:e)?){2,}/i.test(normalized);
 }
 
 function startResponseTimer() {
@@ -40,7 +92,7 @@ function startResponseTimer() {
     worker = null;
     askButton.disabled = false;
     aiStatus.textContent = "Le téléphone a mis trop de temps : réponse de secours produite localement.";
-    answer.textContent = localFallback();
+    answer.textContent = reliableFallback();
     localStorage.setItem("bsc-ai-answer", answer.textContent);
   }, mobileDevice ? 60000 : 150000);
 }
@@ -98,9 +150,11 @@ function handleWorkerMessage(event) {
   } else if (data.type === "answer") {
     clearResponseTimer();
     askButton.disabled = false;
-    answer.textContent = data.answer || "Le modèle n’a pas produit de réponse.";
-    aiStatus.textContent =
-      "Réponse produite sur cet appareil. Aucune note personnelle n’a été envoyée.";
+    const rejected = isUnreliable(data.answer);
+    answer.textContent = rejected ? reliableFallback() : data.answer;
+    aiStatus.textContent = rejected
+      ? "La réponse répétitive de l’IA a été rejetée et remplacée par une réflexion fiable."
+      : "Réponse produite sur cet appareil. Aucune note personnelle n’a été envoyée.";
     localStorage.setItem("bsc-ai-passage", passage.value);
     localStorage.setItem("bsc-ai-question", question.value);
     localStorage.setItem("bsc-ai-answer", answer.textContent);
