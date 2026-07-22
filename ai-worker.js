@@ -1,21 +1,37 @@
 import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.1";
 env.allowLocalModels = false;
+
 let generator = null;
+const mobileDevice =
+  /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+  (navigator.deviceMemory && navigator.deviceMemory <= 4);
+
+const modelId = mobileDevice
+  ? "onnx-community/SmolLM2-135M-Instruct-ONNX"
+  : "onnx-community/Qwen3-0.6B-ONNX";
 
 async function loadModel() {
   if (generator) return generator;
-  const options = navigator.gpu
-    ? { device: "webgpu", dtype: "q4f16" }
-    : { dtype: "q4" };
+
+  // On mobile, q4 on WASM uses much less memory than the former 0.6B model.
+  const options = mobileDevice
+    ? { dtype: "q4" }
+    : navigator.gpu
+      ? { device: "webgpu", dtype: "q4f16" }
+      : { dtype: "q4" };
+
   options.progress_callback = (progress) => {
-    self.postMessage({ type: "progress", progress });
+    self.postMessage({ type: "progress", progress, mobileDevice });
   };
-  generator = await pipeline(
-    "text-generation",
-    "onnx-community/Qwen3-0.6B-ONNX",
-    options
-  );
-  self.postMessage({ type: "ready" });
+
+  self.postMessage({
+    type: "loading",
+    mobileDevice,
+    model: mobileDevice ? "léger (téléphone)" : "complet (ordinateur)"
+  });
+
+  generator = await pipeline("text-generation", modelId, options);
+  self.postMessage({ type: "ready", mobileDevice });
   return generator;
 }
 
@@ -30,31 +46,41 @@ self.onmessage = async (event) => {
         content:
           "Tu es un assistant de réflexion biblique personnel. Réponds uniquement en français. " +
           "Base ta réponse seulement sur le passage biblique et les notes fournis. " +
-          "Distingue clairement ce qui vient de la Bible et ce qui vient des notes personnelles. " +
-          "Cite les références bibliques présentes dans le contexte. " +
-          "Si le contexte ne suffit pas, dis-le clairement et demande un passage supplémentaire. " +
+          "Distingue ce qui vient de la Bible et ce qui vient des notes personnelles. " +
+          "Cite seulement les références présentes. Si le contexte ne suffit pas, dis-le. " +
           "N'invente jamais de verset et ne prétends jamais parler au nom de Dieu. " +
           "Sois respectueux, bienveillant, bref et pratique."
       },
       {
         role: "user",
         content:
-          "PASSAGE BIBLIQUE FOURNI:\n" + (passage || "Aucun passage fourni.") +
-          "\n\nNOTES PERSONNELLES:\n" + (notes || "Aucune note fournie.") +
-          "\n\nQUESTION:\n" + question
+          "PASSAGE :\n" + (passage || "Aucun passage fourni.") +
+          "\n\nNOTES :\n" + (notes || "Aucune note fournie.") +
+          "\n\nQUESTION :\n" + question
       }
     ];
+
     const output = await pipe(messages, {
-      max_new_tokens: 320,
+      max_new_tokens: mobileDevice ? 140 : 260,
       do_sample: false,
       repetition_penalty: 1.08
     });
-    let answer = output?.[0]?.generated_text?.at?.(-1)?.content || "";
-    answer = answer.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-    self.postMessage({ type: "answer", answer });
+
+    let generated = output?.[0]?.generated_text;
+    let answer = Array.isArray(generated)
+      ? generated.at(-1)?.content || ""
+      : String(generated || "");
+
+    answer = answer
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/^assistant\s*/i, "")
+      .trim();
+
+    self.postMessage({ type: "answer", answer, mobileDevice });
   } catch (error) {
     self.postMessage({
       type: "error",
+      mobileDevice,
       message: error?.message || "Le modèle local n'a pas pu démarrer."
     });
   }
