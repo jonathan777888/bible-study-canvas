@@ -62,9 +62,10 @@ self.onmessage = async (event) => {
 
     self.postMessage({ type: "generating", mobileDevice });
     const output = await pipe(messages, {
-      max_new_tokens: mobileDevice ? 72 : 260,
+      max_new_tokens: mobileDevice ? 72 : 160,
       do_sample: false,
-      repetition_penalty: 1.08
+      repetition_penalty: 1.22,
+      no_repeat_ngram_size: 4
     });
 
     let generated = output?.[0]?.generated_text;
