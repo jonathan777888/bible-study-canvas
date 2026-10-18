@@ -1,0 +1,77 @@
+name: Test Bible Study folders
+on:
+  pull_request:
+    paths: ['index.html', '.github/workflows/folders-test.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  folders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate embedded JavaScript
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          import subprocess
+          class Parser(HTMLParser):
+              def __init__(self): super().__init__(); self.active=False; self.parts=[]; self.current=[]
+              def handle_starttag(self, tag, attrs):
+                  if tag=='script' and not dict(attrs).get('src'): self.active=True; self.current=[]
+              def handle_data(self, data):
+                  if self.active: self.current.append(data)
+              def handle_endtag(self, tag):
+                  if tag=='script' and self.active: self.parts.append(''.join(self.current)); self.active=False
+          p=Parser(); p.feed(Path('index.html').read_text())
+          assert p.parts
+          for i,script in enumerate(p.parts):
+              path=Path(f'/tmp/bible-script-{i}.js'); path.write_text(script)
+              subprocess.run(['node','--check',str(path)],check=True)
+          PY
+      - name: Install browser
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Test folders, save, move, rename and delete
+        run: |
+          python3 -m http.server 8765 > /tmp/bible-http.log 2>&1 &
+          sleep 2
+          node - <<'JS'
+          const {chromium}=require('playwright');
+          const assert=require('node:assert/strict');
+          (async()=>{
+            const browser=await chromium.launch();
+            try{
+              for(const width of [390,1280]){
+                const page=await browser.newPage({viewport:{width,height:850}});
+                page.on('dialog', async dialog=>{
+                  if(dialog.type()==='prompt')await dialog.accept(dialog.message().includes('Nouveau nom')?'Méditations':'Études');
+                  else await dialog.accept();
+                });
+                await page.goto('http://127.0.0.1:8765/',{waitUntil:'domcontentloaded'});
+                await page.locator('#createStudyFolder').click();
+                await page.locator('#studyFolder').selectOption('Études');
+                await page.locator('#editor').fill('Une étude à conserver');
+                await page.locator('#saveDatedPage').click();
+                await page.locator('.archiveItem').first().waitFor();
+                assert.match(await page.locator('.archiveItem').first().innerText(),/Études/);
+                await page.locator('#renameStudyFolder').click();
+                assert.match(await page.locator('.archiveItem').first().innerText(),/Méditations/);
+                await page.locator('#studyFolder').selectOption('');
+                await page.locator('.archiveItem .folderAction').first().click();
+                assert.doesNotMatch(await page.locator('.archiveItem').first().innerText(),/Méditations/);
+                await page.locator('#studyFolder').selectOption('Méditations');
+                await page.locator('#deleteStudyFolder').click();
+                assert.equal(await page.locator('#studyFolder option').count(),1);
+                assert.equal(await page.locator('.archiveItem').count(),1);
+                await page.reload();
+                assert.equal(await page.locator('.archiveItem').count(),1);
+                assert.equal(await page.locator('#studyFolder option').count(),1);
+                await page.close();
+              }
+            }finally{await browser.close()}
+          })().catch(e=>{console.error(e);process.exit(1)});
+          JS
